@@ -1,11 +1,17 @@
 import pandas as pd
+import pytest
 
+import database
+import insert_data
+import transform_data
 from transform_data import (
     encode_phone_number,
-    transform_data,
     transform_emails,
     transform_phone_numbers,
     transform_postal_codes,
+)
+from transform_data import (
+    transform_data as apply_transformations,
 )
 
 
@@ -91,7 +97,7 @@ def test_transform_data():
         ]
     })
 
-    result = transform_data(dataframe)
+    result = apply_transformations(dataframe)
 
     assert result["email"].tolist() == [
         "alice@gmail.com",
@@ -122,6 +128,134 @@ def test_transform_data_does_not_modify_original():
 
     original = dataframe.copy(deep=True)
 
-    transform_data(dataframe)
+    apply_transformations(dataframe)
 
     pd.testing.assert_frame_equal(dataframe, original)
+
+
+class FakeCursor:
+    def __init__(self):
+        self.rowcount = 10
+        self.description = [
+            ("id",),
+            ("name",),
+            ("email",),
+            ("postalZip",),
+            ("phone",)
+        ]
+        self.executed_query = None
+        self.executed_data = None
+        self.closed = False
+
+    def executemany(self, query, data):
+        self.executed_query = query
+        self.executed_data = data
+
+    def execute(self, query):
+        self.executed_query = query
+
+    def fetchall(self):
+        return [
+            (1, "Alice Chen", "alice@gmail.com", "94103", "1234567890"),
+            (2, "Brian Osei", "brian@gmail.com", "60614", "1234567891")
+        ]
+
+    def close(self):
+        self.closed = True
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self.fake_cursor = cursor
+        self.committed = False
+        self.closed = False
+
+    def cursor(self):
+        return self.fake_cursor
+
+    def commit(self):
+        self.committed = True
+
+    def is_connected(self):
+        return not self.closed
+
+    def close(self):
+        self.closed = True
+
+
+def test_insert_data(monkeypatch):
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+
+    monkeypatch.setattr(
+        database.mysql.connector,
+        "connect",
+        lambda **kwargs: connection
+    )
+
+    insert_data.insert_data()
+
+    assert cursor.executed_query is not None
+    assert "INSERT INTO" in cursor.executed_query
+    assert len(cursor.executed_data) == 10
+    assert connection.committed is True
+    assert cursor.closed is True
+    assert connection.closed is True
+
+
+def test_fetch_data(monkeypatch):
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+
+    monkeypatch.setattr(
+        database.mysql.connector,
+        "connect",
+        lambda **kwargs: connection
+    )
+
+    result = transform_data.fetch_data()
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 2
+    assert list(result.columns) == [
+        "id",
+        "name",
+        "email",
+        "postalZip",
+        "phone"
+    ]
+    assert cursor.closed is True
+    assert connection.closed is True
+
+
+def test_database_connection_closes(monkeypatch):
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+
+    monkeypatch.setattr(
+        database.mysql.connector,
+        "connect",
+        lambda **kwargs: connection
+    )
+
+    with database.get_db_connection() as db_connection:
+        assert db_connection is connection
+        assert connection.closed is False
+
+    assert connection.closed is True
+
+
+def test_database_connection_closes_on_exception(monkeypatch):
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+
+    monkeypatch.setattr(
+        database.mysql.connector,
+        "connect",
+        lambda **kwargs: connection
+    )
+
+    with pytest.raises(RuntimeError), database.get_db_connection():
+        raise RuntimeError("Simulated operation failure")
+
+    assert connection.closed is True

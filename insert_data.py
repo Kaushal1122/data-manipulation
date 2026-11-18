@@ -1,7 +1,12 @@
 import logging
+from pathlib import Path
 
 from config import DB_TABLE
 from database import get_db_connection
+
+BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "logs"
+LOG_FILE = LOG_DIR / "app.log"
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +26,23 @@ DATA = {
         [10, "Jamal Walker", "jamal.walker@hotmail.com", "30301", "1-404-555-0165"]
     ]
 }
+
+
+def configure_logging():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s - %(levelname)s - "
+            "%(name)s - %(message)s"
+        ),
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler()
+        ],
+        force=True
+    )
 
 
 def insert_data():
@@ -55,6 +77,7 @@ def insert_data():
 
 
 def main():
+    configure_logging()
     insert_data()
 
 
